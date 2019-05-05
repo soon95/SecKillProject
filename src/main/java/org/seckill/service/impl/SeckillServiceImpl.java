@@ -3,8 +3,10 @@ package org.seckill.service.impl;
 import java.util.Date;
 import java.util.List;
 
+import org.apache.catalina.ha.session.ReplicatedSessionListener;
 import org.seckill.dao.SeckillDao;
 import org.seckill.dao.SuccessKilledDao;
+import org.seckill.dao.cache.RedisDao;
 import org.seckill.dto.Exposer;
 import org.seckill.dto.SeckillExecution;
 import org.seckill.entity.Seckill;
@@ -25,13 +27,15 @@ import org.springframework.util.DigestUtils;
 public class SeckillServiceImpl implements SeckillService {
 
 	private Logger logger = LoggerFactory.getLogger(this.getClass());
-	
-	
+
 	@Autowired
 	private SeckillDao seckillDao;
-	
+
 	@Autowired
 	private SuccessKilledDao successKilledDao;
+
+	@Autowired
+	private RedisDao redisDao;
 
 	// 用于混淆md5 盐值
 	private final String slat = "pvzucoixqrwejsklafsdlhkj";
@@ -48,9 +52,15 @@ public class SeckillServiceImpl implements SeckillService {
 
 	@Override
 	public Exposer exportSeckillUrl(long seckillId) {
-		Seckill seckill = seckillDao.queryById(seckillId);
+		// 优化点：缓存优化
+		Seckill seckill = redisDao.getSeckill(seckillId);
 		if (seckill == null) {
-			return new Exposer(false, seckillId);
+			seckill = seckillDao.queryById(seckillId);
+			if (seckill == null) {
+				return new Exposer(false, seckillId);
+			} else {
+				redisDao.putSeckill(seckill);
+			}
 		}
 
 		Date startTime = seckill.getStartTime();
@@ -76,8 +86,7 @@ public class SeckillServiceImpl implements SeckillService {
 	@Override
 	@Transactional
 	/**
-	 * 使用注解控制事务方法的优点：
-	 * 1：开发团队达成一致约定，明确标注事务方法的编程风格
+	 * 使用注解控制事务方法的优点： 1：开发团队达成一致约定，明确标注事务方法的编程风格
 	 * 2：保证事务方法的执行时间尽可能短，不要穿插其他网络操作，RPC/HTTP请求，或者剥离到事务方法外部
 	 * 3：不是所有的方法都需要事务，如只有一条修改操作，只读操作不需要事务控制。
 	 */
@@ -92,18 +101,17 @@ public class SeckillServiceImpl implements SeckillService {
 		Date nowTime = new Date();
 
 		try {
-			int updateCount = seckillDao.reduceNumber(seckillId, nowTime);
-			if (updateCount <= 0) {
-				// 没有更新记录
-				throw new SeckillCloseException("seckill is closed");
+			int insertCount = successKilledDao.insertSuccessKilled(seckillId, userPhone);
+			if (insertCount <= 0) {
+				throw new RepeatKillException("seckill repeated");
 			} else {
-				// 记录购买行为
-				int insertCount = successKilledDao.insertSuccessKilled(seckillId, userPhone);
-
-				if (insertCount <= 0) {
-					throw new RepeatKillException("seckill repeated");
+				// 插入成功
+				int updateCount = seckillDao.reduceNumber(seckillId, nowTime);
+				if (updateCount <= 0) {
+					// 没有更新记录 rollback
+					throw new SeckillCloseException("seckill is closed");
 				} else {
-					// 秒杀成功
+					// 记录购买行为 commit
 					SuccessKilled successKilled = successKilledDao.queryByIdWithSeckill(seckillId, userPhone);
 					return new SeckillExecution(seckillId, SeckillStatEnum.SUCCESS, successKilled);
 				}
