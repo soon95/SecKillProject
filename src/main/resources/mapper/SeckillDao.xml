@@ -32,7 +32,7 @@
         SELECT *
         FROM seckill
         ORDER BY create_time DESC
-        limit #{offset},#{limit}
+        <!-- limit #{offset},#{limit} -->
     </select>
 
     <!--调用储存过程 -->

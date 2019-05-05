@@ -100,7 +100,7 @@ var seckill = {
                         $(this).addClass('disabled');//,<-$(this)===('#killBtn')->
                         //2.发送秒杀请求执行秒杀
                         $.post(killUrl, {}, function (result) {
-//                        	console.log('返回秒杀结果');
+                        	console.log('返回秒杀结果');
                             if (result && result['success']) {
                                 var killResult = result['data'];
                                 var state = killResult['state'];
